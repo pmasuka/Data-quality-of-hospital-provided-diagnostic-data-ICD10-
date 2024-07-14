@@ -1,2 +1,3 @@
 # Master_Thesis_Code_UHasselt
-R and SAS Code for my Master Thesis
+
+This repository contains the code I used for my Master of Statistics and Statistics (University of Hasselt, Belgium) thesis. The thesis was entitled "Data quality of hospital provided diagnostic data (ICD-10)".
