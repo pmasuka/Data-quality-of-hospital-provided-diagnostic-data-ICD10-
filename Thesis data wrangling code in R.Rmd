@@ -1,0 +1,2707 @@
+---
+title: "icd10coding"
+format: pdf
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load required packages
+
+```{r loadPackages, include=FALSE}
+# Load required libraries
+library(plyr)
+library(gridExtra)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(psych)
+library(dataMaid)
+library(DataExplorer)
+library(SmartEDA)
+library(data.table)
+library(dplyr)
+library(tibble)
+library(dlookr)
+library(ISLR)
+library(knitr)
+library(kableExtra)
+library(naniar)
+library(misty)
+library(lubridate)
+library(nparLD)
+library(writexl)
+library(haven)
+library(pivottabler)
+library(mice)
+library(plotly)
+library(psych)
+library(flexdashboard)
+library(magrittr)
+```
+
+Import required files and check dimensions
+
+```{r importadh, echo = FALSE}
+# Load the adh dataset
+dfadh <- read_sas(file_path1)
+```
+
+```{r importsha, echo = FALSE}
+# Load the sha dataset
+dfsha <- read_sas(file_path2)
+```
+
+```{r dimadh}
+dim(dfadh)
+```
+
+```{r dimsha}
+dim(dfsha)
+```
+
+Create a new feature for stay length
+
+```{r staylength}
+# 1 is for long stay and 0 is for short stay
+
+dfsha <- dfsha %>%
+  mutate(stay_length = 1)
+
+dfadh <- dfadh %>%
+  mutate(stay_length = 0)
+```
+
+Concatenate the 2 files
+
+```{r bindrows}
+df <- rbind(dfadh, dfsha)
+```
+
+```{r dimdf}
+dim(df)
+```
+
+```{r headdf, results='hide'}
+head(df)
+```
+
+Create new variables
+
+```{r create_age}
+# Convert age to numeric format
+df <- df %>%
+  mutate(age_numeric = as.numeric(PAT_AGE_ADM))
+```
+
+```{r create_agegroups, echo = FALSE}
+
+# Divide age into age groups
+
+# Define the breaks for age groups
+breaks <- c(18, 30, 40, 50, 60, 85)
+
+# Define the labels for age groups
+labels <- c("18-30", "31-40", "41-50", "51-60", "> 60")
+
+# Create a new variable for age groups
+df$age_group <- cut(df$age_numeric, breaks = breaks, labels = labels, include.lowest = TRUE)
+```
+
+```{r create_losgroups, echo = FALSE}
+# Divide length of stay into groups
+
+# Define the breaks for loshos groups
+breaks_loshos <- c(0, 1, 3, 240)
+
+# Define the labels for loshos groups
+labels_loshos <- c("0-1", "2-3", "4-240")
+
+# Create a new variable for loshos groups
+df$loshos_group <- cut(df$LOSHOS, breaks = breaks_loshos, labels = labels_loshos, include.lowest = TRUE)
+```
+
+```{r label_sex}
+# Create a factor variable with labels
+df$A2_CODE_SEX <- as.factor(df$A2_CODE_SEX)
+levels(df$A2_CODE_SEX) <- c("Male", "Female")
+```
+
+```{r create_diagnosis_patterns, echo = FALSE}
+# Define diagnosis code patterns
+IndWeightDiag <- "^R63[456]|^E66|^Z68"
+NicotineDiag <- "^F17|^T652|^Z5731|^Z7722|^Z87891"
+AlcoholDiag <- "E244|^F10|G312|G721|I426|G621|K292|^K70|^K852|K860|R780|^T510|^Y90|^Z714"
+DiabetDiag <- "E1[01]"
+COPDDiag <- "J44"
+HyperDiag <- "I1[0123]"
+MyCardDiag <- "I252"
+KidneyDiag <- "N18[34569]"
+bmi35Diag <- "Z683[56789]"
+bmi40Diag <- "Z684[012345]"
+sleep_apneaDiag <- "G473[3]"
+
+# Create dummy variables using tidyr
+df <- df %>%
+  mutate(
+    IndWeight = if_else(str_detect(CODE_DIAGNOSE, IndWeightDiag), 1,  0),
+    Nicotine = if_else(str_detect(CODE_DIAGNOSE, NicotineDiag), 1,  0),
+    Alcohol = if_else(str_detect(CODE_DIAGNOSE, AlcoholDiag), 1,  0),
+    Diabetes = if_else(str_detect(CODE_DIAGNOSE, DiabetDiag), 1,  0),
+    COPD = if_else(str_detect(CODE_DIAGNOSE, COPDDiag), 1,  0),
+    Hypertension = if_else(str_detect(CODE_DIAGNOSE, HyperDiag), 1,  0),
+    Myocardial = if_else(str_detect(CODE_DIAGNOSE, MyCardDiag), 1,  0),
+    Kidney = if_else(str_detect(CODE_DIAGNOSE, KidneyDiag), 1,  0),
+       bmi35 = if_else(str_detect(CODE_DIAGNOSE, bmi35Diag), 1,  0),
+       bmi40 = if_else(str_detect(CODE_DIAGNOSE, bmi40Diag), 1,  0),
+    sleep_apnea = if_else(str_detect(CODE_DIAGNOSE, sleep_apneaDiag), 1,  0)
+  )
+```
+
+Keep important variables only
+
+```{r select_vars}
+df <- select(df, isn, care_giver_id, nomen_code, CODE_AGR, A2_HOSPTYPE_CAT, A2_HOSPTYPE_FAC, A2_CODE_SEX, A2_CODE_PLACE_BEFORE_ADM, PATNUM, TYPE_DIAGNOSE, CODE_DIAGNOSE, GP_PRI_SEC_CODE, STAYNUM_ID, DRG, PRINDIAG, PAT_AGE_ADM, LOSHOS, stay_length, age_numeric, age_group, loshos_group, IndWeight, Nicotine, Alcohol, Diabetes, COPD, Hypertension, Myocardial, Kidney, bmi35, bmi40, sleep_apnea)
+```
+
+Data wrangling
+
+```{r bmi_codes}
+bmi_codes_freq <- df %>%
+  filter(bmi35 == 1  | bmi40==1)
+dim(bmi_codes_freq)
+```
+
+```{r multiple_stays}
+patients_with_multiple_stays <- df %>%
+  group_by(PATNUM) %>%
+  summarise(unique_stays = n_distinct(STAYNUM_ID)) %>%
+  filter(unique_stays > 1)
+
+count <- nrow(patients_with_multiple_stays)
+count
+```
+
+```{r keep_first_stayid}
+
+df_filter_stays <- df %>%
+  group_by(PATNUM) %>%
+  arrange(STAYNUM_ID) %>%
+  slice(1)  # Keep the first stay_id for each PATNUM
+
+# Extract rows from 'df' where 'STAYNUM_ID' is in 'df_filtered3'
+df <- df %>%
+  filter(STAYNUM_ID %in% df_filter_stays$STAYNUM_ID)
+
+dim(df)
+```
+
+```{r freq_code_diagnose}
+table(bmi_codes_freq$CODE_DIAGNOSE)
+```
+
+```{r str_dataset, results='hide'}
+str(df)
+```
+
+```{r patient_df}
+# Create a new dataframe
+patient_df <- df %>%
+  group_by(PATNUM) %>%
+  summarise(A2_CODE_SEX = first(A2_CODE_SEX),
+    age_numeric = mean(age_numeric),
+    LOSHOS = mean(LOSHOS),
+  )
+
+dim(patient_df)
+```
+
+BMI codes frequency - for patients with weight diagnosis only
+
+```{r bmi_weight, results='hide'}
+filtered_df_weight <- df %>%
+  filter(IndWeight == 1)
+
+table(filtered_df_weight$CODE_DIAGNOSE)
+```
+
+Distinct counts of key variables
+
+```{r distinct_key_vars}
+# Count distinct values in multiple columns
+distinct_counts <- df %>%
+  summarise(across(c(CODE_AGR, PATNUM, STAYNUM_ID, care_giver_id, PRINDIAG, CODE_DIAGNOSE), n_distinct))
+
+# Print the distinct counts
+print(distinct_counts)
+```
+
+Overall summary statistics
+
+```{r summary_stats}
+# Generate summary statistics
+summary_df <- summary(df)
+
+summary_df
+```
+
+Distribution of age by sex
+
+```{r age_sex_histogram}
+# Create histograms for A2_CODE_SEX=1 and A2_CODE_SEX=2
+histogram_sex1 <- ggplot(df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "lightblue", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=1", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex1 <- histogram_sex1 + scale_x_continuous(breaks = seq(0, 90, by = 1), labels = seq(0, 90, by = 1))
+
+
+histogram_sex2 <- ggplot(df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "brown", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=2", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex2 <- histogram_sex2 + scale_x_continuous(breaks = seq(0, 90, by = 1), labels = seq(0, 90, by = 1))
+
+# Set up a 1x2 grid for side-by-side plots
+par(mfrow = c(1, 2))
+
+# Plot the histograms
+plot(histogram_sex1)
+plot(histogram_sex2)
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+
+```
+
+Distribution of age by hospital code, for a sample of hospitals
+
+```{r age_hospital_violin}
+# Get the unique hospital codes
+unique_hospitals <- unique(df$CODE_AGR)
+
+# Randomly sample 20 hospitals
+sampled_hospitals <- sample(unique_hospitals, size = 20)
+
+# Filter the dataframe to include only the sampled hospitals
+sampled_df <- df[df$CODE_AGR %in% sampled_hospitals, ]
+
+# Create a histogram plot
+age_hosp_violin <- ggplot(sampled_df, aes(x = CODE_AGR, y = age_numeric, fill = CODE_AGR)) +
+  geom_violin() +
+  labs(title = "Age vs. Hospital Code", x = "Hospital Code", y = "Age") +
+  theme_minimal() +
+    theme(axis.text.x = element_blank())  # Hide x-axis tick mark labels
+
+
+ggsave("age_hosp_histogram.png", plot = age_hosp_violin, width = 10, height = 6)
+age_hosp_violin
+```
+
+```{r age_by_hospital_boxplot}
+
+# Create a box plot for age vs. hospital code
+age_hosp_boxplot <- ggplot(df, aes(x = CODE_AGR, y = age_numeric)) +
+  geom_boxplot(fill = "skyblue", color = "darkblue") +
+  labs(title = "Age vs. Hospital Code", x = "Hospital Code", y = "Age") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())  # Hide x-axis tick mark labels
+
+# Save the plot as an image file (optional)
+ggsave("age_hosp_boxplot.png", plot = age_hosp_boxplot, width = 10, height = 6)
+
+# Display the box plot
+age_hosp_boxplot
+
+```
+
+```{r age_los_scatter}
+# Create the scatter plot
+age_LOSHOS_plot <- scatter_plot <- ggplot(df, aes(x = LOSHOS, y = age_numeric, color = A2_CODE_SEX)) +
+  geom_point() +
+  labs(x = "Length of Stay in Hospital", y = "Age", title = "Scatter Plot of Age vs. Length of Stay") +
+  theme_minimal()
+
+ggsave("age_LOSHOS_plot.png", plot = age_LOSHOS_plot, width = 10, height = 6)
+
+age_LOSHOS_plot
+```
+
+Distribution of stays per hospital code, in descending order
+
+```{r stays_hospital, results='hide'}
+# Stays by hospital - head
+df_stays_by_hospital <- df %>%
+  group_by(CODE_AGR) %>%
+  summarise(`Total Unique Stays` = n_distinct(STAYNUM_ID)) %>%
+  arrange(desc(`Total Unique Stays`)) %>%
+  rename(Hospital = CODE_AGR)
+  
+df_stays_by_hospital
+```
+
+```{r stays_hospital_bar}
+# Create the bar chart
+bar_chart_stays_hospital <- ggplot(df_stays_by_hospital, aes(x = Hospital, y = `Total Unique Stays`)) +
+  geom_bar(stat = "identity", fill = "skyblue", alpha = 0.7) +
+  labs(title = "Total Unique Stays by Hospital",
+       x = "Hospital",
+       y = "Total Unique Stays") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())  # Hide x-axis tick mark labels
+
+
+# Save the plot as a PNG file
+ggsave("total_stays_by_hospital.png", plot = bar_chart_stays_hospital, width = 10, height = 6)
+
+# Display the bar chart
+bar_chart_stays_hospital
+```
+
+Distribution of stays per caregiver, in descending order
+
+```{r stays_caregiver, results='hide'}
+# stays by caregiver - head
+df_stays_by_caregiver <- df %>%
+  group_by(care_giver_id) %>%
+  summarise(`Total Unique Stays` = n_distinct(STAYNUM_ID)) %>%
+  arrange(desc(`Total Unique Stays`)) %>%
+  rename(Caregiver = care_giver_id)
+df_stays_by_caregiver
+```
+
+```{r stays_caregiver_bar}
+# Create the bar chart
+bar_chart_stays_caregiver <- ggplot(df_stays_by_caregiver, aes(x = Caregiver, y = `Total Unique Stays`)) +
+  geom_bar(stat = "identity", fill = "red", alpha = 0.7) +
+  labs(title = "Total Unique Stays by Caregiver",
+       x = "Caregiver",
+       y = "Total Unique Stays") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())  # Hide x-axis tick mark labels
+
+
+# Save the plot as a PNG file
+ggsave("total_stays_by_caregiver.png", plot = bar_chart_stays_caregiver, width = 10, height = 6)
+
+# Display the bar chart
+bar_chart_stays_caregiver
+```
+
+Distribution of stays per patient, in descending order
+
+```{r stays_per_patient, results='hide'}
+# stays per patient 
+
+num_stays_per_patient <- df %>%
+  group_by(PATNUM) %>%
+  summarise(`Total Unique Stays` = n_distinct(STAYNUM_ID)) %>%
+  arrange(desc(`Total Unique Stays`)) %>%
+  rename("Patient Number" = PATNUM) %>%
+  head()
+
+num_stays_per_patient
+```
+
+Distribution of stays per age group, in descending order
+
+```{r stays_agegrp, results='hide'}
+# stays per age group
+df_stays_by_agegrp <- df %>%
+  group_by(age_group) %>%
+  summarise(`Total Unique Stays` = n_distinct(STAYNUM_ID)) %>%
+  rename("Age group" = age_group)
+
+df_stays_by_agegrp
+```
+
+```{r stays_agegrp_bar}
+# Create the bar chart
+bar_chart_agegrp <- ggplot(df_stays_by_agegrp, aes(x = `Age group`, y = `Total Unique Stays`)) +
+  geom_bar(stat = "identity", fill = "skyblue", alpha = 0.7) +
+  labs(title = "Total Unique Stays by Age Group",
+       x = NULL,  # Set x-axis label to NULL
+       y = "Total Unique Stays") +
+  theme_minimal()
+
+# Save the plot as a PNG file
+ggsave("total_stays_by_agegroup.png", plot = bar_chart_agegrp, width = 10, height = 6)
+
+# Display the modified bar chart
+bar_chart_agegrp
+```
+
+```{r doctors_multiple_hosp}
+multi_hospital_caregivers <- df %>%
+  group_by(care_giver_id) %>%
+  summarise(unique_hospitals = n_distinct(CODE_AGR)) %>%
+  filter(unique_hospitals > 1)
+
+# Number of caregivers appearing in more than one hospital
+count <- nrow(multi_hospital_caregivers)
+cat("Number of caregivers appearing in more than one hospital:", count, "\n")
+```
+
+```{r patients_multiple_hosp}
+multi_hospital_patients <- df %>%
+  group_by(PATNUM) %>%
+  summarise(unique_hospital_patients = n_distinct(CODE_AGR)) %>%
+  filter(unique_hospital_patients > 1) %>%
+  arrange(desc(unique_hospital_patients))
+
+# Number of doctors appearing in more than one hospital
+count <- nrow(multi_hospital_patients)
+cat("Number of patients appearing in more than one hospital:", count, "\n")
+```
+
+Missingness analysis
+
+Total stays by hospital - head and tail
+
+```{r stays_hosp_%_top, results='hide'}
+num_stays <- n_distinct(df$STAYNUM_ID)
+
+# Calculate stays by hospital
+stays_by_hospital_percent_top <- df %>%
+  group_by(CODE_AGR) %>%
+  summarise(`Count Stays` = n_distinct(STAYNUM_ID)) %>%
+  mutate(Percent = sprintf("%.1f%%", (`Count Stays` / num_stays) * 100)) %>%
+  arrange(desc(Percent)) %>%
+  rename(Hospital = CODE_AGR) %>%
+  head()
+
+stays_by_hospital_percent_top
+```
+
+```{r stays_hosp_%_tail, results='hide'}
+# Calculate stays by hospital - head
+stays_by_hospital_percent_tail <- df %>%
+  group_by(CODE_AGR) %>%
+  summarise(`Count Stays` = n_distinct(STAYNUM_ID)) %>%
+  mutate(Percent = sprintf("%.1f%%", (`Count Stays` / num_stays) * 100)) %>%
+  arrange(desc(Percent)) %>%
+  rename(Hospital = CODE_AGR) %>%
+  tail()
+
+stays_by_hospital_percent_tail
+```
+
+2\) Total stays by caregiver - head and tail
+
+```{r stays_caregiv_%_top, results='hide'}
+# Calculate stays by caregiver
+stays_by_caregiver_percent_head <- df %>%
+  group_by(care_giver_id) %>%
+  summarise(`Count Stays`= n_distinct(STAYNUM_ID)) %>%
+  mutate(Percent = sprintf("%.1f%%", (`Count Stays` / num_stays) * 100)) %>%
+    arrange(desc(Percent)) %>%
+  rename(Caregiver = care_giver_id) %>%
+  head()
+
+stays_by_caregiver_percent_head
+```
+
+```{r stays_caregiv_%_tail, results='hide'}
+# Calculate stays by caregiver
+stays_by_caregiver_percent_tail <- df %>%
+  group_by(care_giver_id) %>%
+  summarise(`Count Stays`= n_distinct(STAYNUM_ID)) %>%
+  mutate(Percent = sprintf("%.1f%%", (`Count Stays` / num_stays) * 100)) %>%
+    arrange(desc(Percent)) %>%
+  rename(Caregiver = care_giver_id) %>%
+  tail()
+
+stays_by_caregiver_percent_tail
+```
+
+3)  Total stays by patient - head and tail
+
+Overall PATNUM
+
+```{r count_per_var_patient, results='hide'}
+# Select variables of interest
+variables <- c("IndWeight", "Nicotine", "Alcohol", "Diabetes", "COPD", "Hypertension", "Myocardial", "Kidney", "bmi35", "bmi40", "sleep_apnea")
+
+# Create a dataframe to store the sum of each variable per care_giver_id
+count_per_variable_patients <- data.frame(PATNUM = sort(unique(df$PATNUM)))
+
+# Loop through each variable, calculate the sum per care_giver_id, and store it in the dataframe
+for (variable in variables) {
+  count_per_variable_patients[[variable]] <- df %>%
+    group_by(PATNUM) %>%
+    summarise(sum_value = ifelse(sum(!!sym(variable)) == 0, 0, 1)) %>%
+    pull(sum_value)
+}
+
+# Print the result
+head(count_per_variable_patients)
+```
+
+```{r summary_var_patient, results='hide'}
+# Select variables of interest
+variables <- c("IndWeight", "Nicotine", "Alcohol", "Diabetes", "COPD", "Hypertension", "Myocardial", "Kidney", "bmi35", "bmi40", "sleep_apnea")
+
+# Create a dataframe to store the summary statistics per care_giver_id
+summary_per_variable_patients <- data.frame(PATNUM = sort(unique(df$PATNUM)))
+
+# Calculate summary statistics for each variable
+for (variable in variables) {
+  if (variable == "A2_CODE_SEX") {
+    # Take the first value for A2_CODE_SEX
+    summary_per_variable_patients[[variable]] <- df %>%
+      group_by(PATNUM) %>%
+      slice(1) %>%
+      pull(!!sym(variable))
+  } else if (variable == "age_numeric") {
+    # Calculate average age
+    summary_per_variable_patients[[variable]] <- df %>%
+      group_by(PATNUM) %>%
+      summarise(age_numeric = mean(!!sym(variable), na.rm = TRUE)) %>%
+      pull(age_numeric)
+  } else if (variable == "LOSHOS") {
+    # Calculate average LOSHOS
+    summary_per_variable_patients[[variable]] <- df %>%
+      group_by(PATNUM) %>%
+      summarise(LOSHOS = mean(!!sym(variable), na.rm = TRUE)) %>%
+      pull(LOSHOS)
+  } else {
+    # For other variables, calculate a binary indicator (0 or 1)
+    summary_per_variable_patients[[variable]] <- df %>%
+      group_by(PATNUM) %>%
+      summarise(sum_value = ifelse(sum(!!sym(variable)) == 0, 0, 1)) %>%
+      pull(sum_value)
+  }
+}
+
+# Print the result
+print(dim(summary_per_variable_patients))
+print(head(summary_per_variable_patients))
+```
+
+Length of stay in hospital
+
+```{r summary_los}
+summary(patient_df$LOSHOS)
+```
+
+```{r los_limits}
+# Calculate outlier limits
+
+# Calculate the IQR of the variable
+IQR_var <- IQR(patient_df$LOSHOS, na.rm = TRUE)
+
+# Calculate the 1st quartile (25th percentile)
+Q1 <- quantile(patient_df$LOSHOS, 0.25, na.rm = TRUE)
+
+# Calculate the 3rd quartile (75th percentile)
+Q3 <- quantile(patient_df$LOSHOS, 0.75, na.rm = TRUE)
+
+# Define the lower limit for outliers
+lower_limit <- Q1 - 1.5 * IQR_var
+
+# Define the upper limit for outliers
+upper_limit <- Q3 + 1.5 * IQR_var
+
+# Print the outlier limits
+cat("Lower Limit: ", lower_limit, "\n")
+cat("Upper Limit: ", upper_limit, "\n")
+```
+
+```{r los_hist_with_outliers}
+LOSHOS_with_outliers_plot <- ggplot(patient_df, aes(x = LOSHOS)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  labs(title = "histogram Plot of Length of Stay in Hospital", x = "Length of Stay") +
+  theme_minimal()
+
+ggsave("LOSHOS_with_outliers_plot.png", plot = LOSHOS_with_outliers_plot, width = 10, height = 6)
+
+LOSHOS_with_outliers_plot
+```
+
+```{r los_hist_outliers}
+# Create a subset of the data between the lower and upper limits
+df_subset <- patient_df[patient_df$LOSHOS >= lower_limit & patient_df$LOSHOS <= upper_limit, ]
+
+# Create the ggplot object
+LOSHOS_no_outliers_plot <- ggplot(df_subset, aes(x = LOSHOS)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  labs(title = "histogram Plot of Length of Stay in Hospital - No Outliers", x = "Length of Stay") +
+  theme_minimal()
+
+ggsave("LOSHOS_no_outliers_plot.png", plot = LOSHOS_no_outliers_plot, width = 10, height = 6)
+LOSHOS_no_outliers_plot
+```
+
+![](images/clipboard-1362719507.png)
+
+Age by sex distribution
+
+```{r age_sex_hist2}
+# Create histograms for A2_CODE_SEX=1 and A2_CODE_SEX=2
+histogram_sex1 <- ggplot(patient_df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "lightblue", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=1", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex1 <- histogram_sex1 + scale_x_continuous(breaks = seq(0, 90, by = 1), labels = seq(0, 90, by = 1))
+
+
+histogram_sex2 <- ggplot(patient_df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "brown", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=2", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex2 <- histogram_sex2 + scale_x_continuous(breaks = seq(0, 90, by = 1), labels = seq(0, 90, by = 1))
+
+# Set up a 1x2 grid for side-by-side plots
+par(mfrow = c(1, 2))
+
+# Plot the histograms
+plot(histogram_sex1)
+plot(histogram_sex2)
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+```{r age_sex_hist}
+# Create histograms for A2_CODE_SEX=1 and A2_CODE_SEX=2
+histogram_sex1 <- ggplot(patient_df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "lightblue", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=1", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex1 <- histogram_sex1 + scale_x_continuous(breaks = seq(0, 90, by = 10), labels = seq(0, 90, by = 10))
+
+
+histogram_sex2 <- ggplot(patient_df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 5, fill = "brown", alpha = 0.7) +
+  labs(title = "Histogram for A2_CODE_SEX=2", x = "Age", y = "Frequency") +
+  theme_minimal()
+
+histogram_sex2 <- histogram_sex2 + scale_x_continuous(breaks = seq(0, 90, by = 10), labels = seq(0, 90, by = 10))
+
+# Set up a 1x2 grid for side-by-side plots
+par(mfrow = c(1, 2))
+
+# Plot the histograms
+plot(histogram_sex1)
+plot(histogram_sex2)
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+```{r percent_missing_per_var}
+# Calculate the total distinct patients
+total_patients <- length(unique(df$PATNUM))
+
+# Create an empty dataframe to store the results
+zero_counts_patients <- data.frame(
+  Variable = variables,
+  Number_of_Zeros = numeric(length(variables)),
+  Percent_missing = numeric(length(variables))
+)
+
+# Loop through each variable
+for (i in seq_along(variables)) {
+  # Calculate the number of zeros across care_giver_id
+  num_zeros <- sum(count_per_variable_patients[[i+1]] == 0)  # Adjust index to start from the second column
+  # Calculate the percentage of missing values
+  percent_missing <- (num_zeros / total_patients)
+  # Assign values to the dataframe
+  zero_counts_patients[i, "Number_of_Zeros"] <- num_zeros
+  zero_counts_patients[i, "Percent_missing"] <- percent_missing
+}
+# 
+# # Print the result
+# print(zero_counts_patients)
+
+zero_counts_patients_final <- zero_counts_patients %>%
+  select("Variable", "Percent_missing")
+
+# Print the result
+print(zero_counts_patients_final)
+```
+
+```{r overall_percent_absent}
+# Calculate the total distinct patients
+total_patients <- length(unique(df$PATNUM))
+
+# Create an empty dataframe to store the results
+zero_counts_patients <- data.frame(
+  Variable = variables,
+  Number_of_Zeros = numeric(length(variables)),
+  Percent_missing = numeric(length(variables))
+)
+
+# Loop through each variable
+for (i in seq_along(variables)) {
+  # Calculate the number of zeros across care_giver_id
+  num_zeros <- sum(count_per_variable_patients[[i+1]] == 0)  # Adjust index to start from the second column
+  # Calculate the percentage of missing values
+  percent_missing <- (num_zeros / total_patients) * 100  # Multiply by 100
+  # Assign values to the dataframe
+  zero_counts_patients[i, "Number_of_Zeros"] <- num_zeros
+  zero_counts_patients[i, "Percent_missing"] <- percent_missing
+}
+
+# Select only the "Variable" and "Percent_missing" columns
+zero_counts_patients_final <- zero_counts_patients %>%
+  select("Variable", "Percent_missing")
+
+# Print the result
+print(zero_counts_patients_final)
+
+```
+
+Overall plot
+
+```{r missing_by_diag_bar}
+# Create the bar chart
+bar_absence_by_diagnosis <- ggplot(zero_counts_patients_final, aes(x = Variable, y = Percent_missing)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.7) +
+  labs(x = "Variable", y = "Percent Absent") +
+  ggtitle("Absence by Diagnosis") +
+  theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+bar_absence_by_diagnosis
+```
+
+Alternative graph
+
+```{r missing_by_diag_bar_5_diagnoses}
+# Replace the example variable names with your actual variable names
+selected_variables <- c("IndWeight", "Nicotine", "Diabetes", "Hypertension", "sleep_apnea")
+
+# Filter the data to include only the selected variables
+filtered_data <- zero_counts_patients_final %>%
+    filter(Variable %in% selected_variables)
+
+# Create the bar chart
+bar_absence_by_diagnosis_5_diagnoses <- ggplot(filtered_data, aes(x = Variable, y = Percent_missing)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.7) +
+  labs(x = "Variable", y = "Percent Absent") +
+  ggtitle("Absence by Diagnosis") +
+  theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0,100)
+
+
+bar_absence_by_diagnosis_5_diagnoses
+```
+
+```{r missing_by_diag_bar_5_diagnoses_plus_bmi}
+# Replace the example variable names with your actual variable names
+selected_variables <- c("IndWeight", "Nicotine", "Diabetes", "Hypertension", "sleep_apnea", "bmi35", "bmi40")
+
+# Filter the data to include only the selected variables
+filtered_data <- zero_counts_patients_final %>%
+    filter(Variable %in% selected_variables)
+
+# Create the bar chart
+bar_absence_by_diagnosis_5_diag_bmi <- ggplot(filtered_data, aes(x = Variable, y = Percent_missing)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.7) +
+  labs(x = "Variable", y = "Percent Absent") +
+  ggtitle("Absence by Diagnosis") +
+  theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0,100)
+
+bar_absence_by_diagnosis_5_diag_bmi
+```
+
+```{r missing_bmi}
+# Replace the example variable names with your actual variable names
+selected_variables <- c("bmi35", "bmi40")
+
+# Filter the data to include only the selected variables
+filtered_data <- zero_counts_patients_final %>%
+    filter(Variable %in% selected_variables)
+
+# Create the bar chart
+bar_absence_by_diagnosis_bmi <- ggplot(filtered_data, aes(x = Variable, y = Percent_missing)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.7) +
+  labs(x = "Variable", y = "Percent Absent") +
+  ggtitle("Absence by Diagnosis") +
+  theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0,1)
+
+bar_absence_by_diagnosis_bmi
+```
+
+Overall number of patients by hospital
+
+```{r patients_hosp_top, results='hide'}
+# Calculate total distinct PATNUM for each care_giver_id
+count_patients_by_hospital_head <- aggregate(PATNUM ~ CODE_AGR, data = df, FUN = function(x) length(unique(x)))
+
+# Display the result
+count_patients_by_hospital_head %>% arrange(desc(PATNUM)) %>%
+  head()
+```
+
+```{r patients_hosp_tail, results='hide'}
+# Calculate total distinct PATNUM for each care_giver_id
+count_patients_by_hospital_tail <- aggregate(PATNUM ~ CODE_AGR, data = df, FUN = function(x) length(unique(x)))
+
+# Display the result
+count_patients_by_hospital_tail %>% arrange(desc(PATNUM)) %>%
+  tail()
+```
+
+Overall number of patients by caregiver
+
+```{r patients_careg_top, results='hide'}
+# Calculate total distinct PATNUM for each care_giver_id
+count_patients_by_caregiver_head <- aggregate(PATNUM ~ care_giver_id, data = df, FUN = function(x) length(unique(x)))
+
+# Display the result
+count_patients_by_caregiver_head %>% arrange(desc(PATNUM)) %>%
+  head()
+```
+
+```{r patients_careg_tail, results='hide'}
+# Calculate total distinct PATNUM for each care_giver_id
+count_patients_by_caregiver_tail <- aggregate(PATNUM ~ care_giver_id, data = df, FUN = function(x) length(unique(x)))
+
+# Display the result
+count_patients_by_caregiver_tail %>% arrange(desc(PATNUM)) %>%
+  tail()
+```
+
+```{r caregiv_calcs, results='hide'}
+# calculations for caregiver
+
+df_caregiver <- df %>%
+  group_by(care_giver_id, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40),
+    total_sleep_apnea = sum(sleep_apnea)
+  ) %>%
+  ungroup() %>%
+  group_by(care_giver_id) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+     num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = (num_zeros_nicotine / num_patnum)*100,
+    Percent_missing_indweight = (num_zeros_indweight / num_patnum)*100,
+    Percent_missing_alcohol = (num_zeros_alcohol / num_patnum)*100,
+    Percent_missing_diabetes = (num_zeros_diabetes / num_patnum)*100,
+    Percent_missing_copd = (num_zeros_copd / num_patnum)*100,
+    Percent_missing_hypertension = (num_zeros_hypertension / num_patnum)*100,
+    Percent_missing_myocardial = (num_zeros_myocardial / num_patnum)*100,
+    Percent_missing_kidney = (num_zeros_kidney / num_patnum)*100,
+    Percent_missing_bmi35 = (num_zeros_bmi35 / num_patnum)*100,
+    Percent_missing_bmi40 = (num_zeros_bmi40 / num_patnum)*100,
+    Percent_missing_sleep_apnea = (num_zeros_sleep_apnea / num_patnum)*100
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_caregiver) <- c(
+  "care_giver_id", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney", 
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_zeros_sleep_apnea",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial", 
+  "Percent_missing_kidney",
+  "Percent_missing_bmi35",
+  "Percent_missing_bmi40",
+  "Percent_missing_sleep_apnea"
+)
+
+
+df_caregiver_final <- df_caregiver %>%
+  select(care_giver_id,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_bmi35,
+    Percent_missing_bmi40,
+    Percent_missing_sleep_apnea
+  )
+
+number_patients_per_caregiver <- df_caregiver_final %>%
+  select(care_giver_id, num_patnum) %>%
+  arrange(num_patnum)
+
+df_caregiver_final <- df_caregiver_final %>%
+  select(care_giver_id,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+        Percent_missing_bmi35,
+    Percent_missing_bmi40,)
+
+head(df_caregiver_final)
+```
+
+```{r missing_caregiver_bar}
+# Reshape data from wide to long format for ggplot
+result_long <- pivot_longer(df_caregiver_final, 
+                             cols = Percent_missing_nicotine:Percent_missing_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long$care_giver_id <- factor(result_long$care_giver_id)
+
+# Get a random sample of five caregivers
+sampled_caregivers <- sample(unique(result_long$care_giver_id), size = 5)
+
+# Filter the data to include only the sampled caregivers
+sampled_result <- result_long[result_long$care_giver_id %in% sampled_caregivers, ]
+
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000")
+
+# Plot
+prop_zero_by_caregiver <- ggplot(sampled_result, aes(x = care_giver_id, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and Caregiver",
+       x = "Caregiver",
+       y = "Percentage of Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_caregiver.png", plot = prop_zero_by_caregiver, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_caregiver
+```
+
+Hospital
+
+```{r missing_hosp_freq, results='hide'}
+# calculations for CODE_AGR
+
+df_code_agr <- df %>%
+  group_by(CODE_AGR, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40),
+    total_sleep_apnea = sum(sleep_apnea)
+  ) %>%
+  ungroup() %>%
+  group_by(CODE_AGR) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = (num_zeros_nicotine / num_patnum)*100,
+    Percent_missing_indweight = (num_zeros_indweight / num_patnum)*100,
+    Percent_missing_alcohol = (num_zeros_alcohol / num_patnum)*100,
+    Percent_missing_diabetes = (num_zeros_diabetes / num_patnum)*100,
+    Percent_missing_copd = (num_zeros_copd / num_patnum)*100,
+    Percent_missing_hypertension = (num_zeros_hypertension / num_patnum)*100,
+    Percent_missing_myocardial = (num_zeros_myocardial / num_patnum)*100,
+    Percent_missing_kidney = (num_zeros_kidney / num_patnum)*100,
+     Percent_missing_bmi35 = (num_zeros_bmi35 / num_patnum)*100,
+     Percent_missing_bmi40 = (num_zeros_bmi40 / num_patnum)*100,
+    Percent_missing_sleep_apnea = (num_zeros_sleep_apnea / num_patnum
+)*100
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_agr) <- c(
+  "CODE_AGR", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_zeros_sleep_apnea",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial", 
+  "Percent_missing_kidney",
+  "Percent_missing_bmi35",
+  "Percent_missing_bmi40",
+  "Percent_missing_sleep_apnea"
+)
+
+
+df_code_agr_final <- df_code_agr %>%
+  select(CODE_AGR,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+        Percent_missing_bmi35,
+    Percent_missing_bmi40,
+  )
+
+num_patients_per_hospital <- df_code_agr_final %>%
+  select(CODE_AGR, num_patnum) %>%
+  arrange(num_patnum)
+
+head(df_code_agr_final)
+```
+
+```{r missing_by_var_by_hospital}
+missing_nicotine_by_hosp <- ggplot(df_code_agr_final, aes(x = CODE_AGR, y = Percent_missing_nicotine)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="brown") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Nicotine",
+       x = "Hospital",
+       y = "% Absent - Nicotine") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())+
+ylim(0,100)+
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_nicotine_by_hosp.png", plot = missing_nicotine_by_hosp, width = 10, height = 6)
+
+
+missing_weight_by_hosp <- ggplot(df_code_agr_final, aes(x = CODE_AGR, y = Percent_missing_indweight)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="blue") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Weight",
+       x = "Hospital",
+       y = "% Absent - Weight") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100)+
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_weight_by_hosp.png", plot = missing_weight_by_hosp, width = 10, height = 6)
+
+
+missing_diabetes_by_hosp <- ggplot(df_code_agr_final, aes(x = CODE_AGR, y = Percent_missing_diabetes)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="darkgrey") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Diabetes",
+       x = "Hospital",
+       y = "% Absent - Diabetes") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100)+
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_diabetes_by_hosp.png", plot = missing_diabetes_by_hosp, width = 10, height = 6)
+
+missing_hyp_by_hosp <- ggplot(df_code_agr_final, aes(x = CODE_AGR, y = Percent_missing_hypertension)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="lightgreen") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Hypertension",
+       x = "Hospital",
+       y = "% Absent - Hypertension") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_nicotine_by_hosp.png", plot = missing_hyp_by_hosp, width = 10, height = 6)
+
+
+missing_sleep_by_hosp <- ggplot(df_code_agr_final, aes(x = CODE_AGR, y = Percent_missing_sleep_apnea)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="purple") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Sleep Apnea",
+       x = "Hospital",
+       y = "% Absent - Sleep apnea") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_sleep_by_hosp.png", plot = missing_sleep_by_hosp, width = 10, height = 6) 
+
+
+# Arrange the plots in a 2x2 grid
+grid.arrange(
+  missing_nicotine_by_hosp,
+  missing_weight_by_hosp,
+  missing_diabetes_by_hosp,
+  missing_hyp_by_hosp,
+  missing_sleep_by_hosp,
+  ncol = 3
+)
+
+# Reset the layout to a single plot
+par(mfrow = c(1, 1))
+
+ggsave("missing_plots_by_hospital.png", grid.arrange(
+    missing_nicotine_by_hosp,
+    missing_weight_by_hosp,
+    missing_diabetes_by_hosp,
+    missing_hyp_by_hosp,
+    missing_sleep_by_hosp,
+    ncol = 3
+))
+```
+
+```{r missing_by_var_by_caregiver}
+missing_nicotine_by_caregiver <- ggplot(df_caregiver_final, aes(x = care_giver_id, y = Percent_missing_nicotine)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="brown") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Nicotine",
+       x = "Caregiver",
+       y = "% Absent - Nicotine") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_nicotine_by_caregiver.png", plot = missing_nicotine_by_caregiver, width = 10, height = 6)
+
+
+missing_weight_by_caregiver <- ggplot(df_caregiver_final, aes(x = care_giver_id, y = Percent_missing_indweight)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="blue") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Weight",
+       x = "Caregiver",
+       y = "% Absent - Weight") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_weight_by_caregiver.png", plot = missing_weight_by_caregiver, width = 10, height = 6)
+
+
+missing_diabetes_by_caregiver <- ggplot(df_caregiver_final, aes(x = care_giver_id, y = Percent_missing_diabetes)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="darkgrey") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Diabetes",
+       x = "Caregiver",
+       y = "% Absent - Diabetes") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_diabetes_by_caregiver.png", plot = missing_diabetes_by_caregiver, width = 10, height = 6)
+
+missing_hyp_by_caregiver <- ggplot(df_caregiver_final, aes(x = care_giver_id, y = Percent_missing_hypertension)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="green") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Hypertension",
+       x = "Caregiver",
+       y = "% Absent - Hypertension") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_nicotine_by_caregiver.png", plot = missing_hyp_by_caregiver, width = 10, height = 6)
+
+missing_sleep_by_caregiver <- ggplot(df_caregiver_final, aes(x = care_giver_id, y = Percent_missing_sleep_apnea)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), fill="purple") + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Sleep Apnea",
+       x = "Caregiver",
+       y = "% Absent - Sleep Apnea") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+ylim(0,100) +
+  theme(plot.title = element_text(size = 11, hjust = 0.5))
+
+# Save the plot as a PNG file
+ggsave("missing_sleep_by_caregiver.png", plot = missing_sleep_by_caregiver, width = 10, height = 6)
+
+# Arrange the plots in a 2x2 grid
+grid.arrange(
+  missing_nicotine_by_caregiver,
+  missing_weight_by_caregiver,
+  missing_diabetes_by_caregiver,
+  missing_hyp_by_caregiver,
+  missing_sleep_by_caregiver,
+  ncol = 3
+)
+
+# Reset the layout to a single plot
+par(mfrow = c(1, 1))
+
+ggsave("missing_plots_by_hospital.png", grid.arrange(
+    missing_nicotine_by_caregiver,
+    missing_weight_by_caregiver,
+    missing_diabetes_by_caregiver,
+    missing_hyp_by_caregiver,
+    missing_sleep_by_caregiver,
+    ncol = 3
+))
+```
+
+```{r missing_hosp_bar}
+# Reshape data from wide to long format for ggplot
+result_long_hospital <- pivot_longer(df_code_agr_final, 
+                             cols = Percent_missing_nicotine:Percent_missing_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_hospital$CODE_AGR <- factor(result_long_hospital$CODE_AGR)
+
+# Get a random sample of five caregivers
+sampled_hospitals <- sample(unique(result_long_hospital$CODE_AGR), size = 5)
+
+# Filter the data to include only the sampled caregivers
+sampled_result_hospitals <- result_long_hospital[result_long_hospital$CODE_AGR %in% sampled_hospitals, ]
+
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000")
+
+# Plot
+prop_zero_by_hospital <- ggplot(sampled_result_hospitals, aes(x = CODE_AGR, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and Hospital",
+       x = "Hospital",
+       y = "Percentage of Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_hospital.png", plot = prop_zero_by_hospital, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_hospital
+```
+
+Nomenclature
+
+```{r missing_nomen_freq}
+# calculations for nomen_code
+
+df_code_nomen_code <- df %>%
+  group_by(nomen_code, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_sleep_apnea = sum(sleep_apnea),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40)
+  ) %>%
+  ungroup() %>%
+  group_by(nomen_code) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea),    
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = num_zeros_nicotine / num_patnum,
+    Percent_missing_indweight = num_zeros_indweight / num_patnum,
+    Percent_missing_alcohol = num_zeros_alcohol / num_patnum,
+    Percent_missing_diabetes = num_zeros_diabetes / num_patnum,
+    Percent_missing_copd = num_zeros_copd / num_patnum,
+    Percent_missing_hypertension = num_zeros_hypertension / num_patnum,
+    Percent_missing_myocardial = num_zeros_myocardial / num_patnum,
+    Percent_missing_kidney = num_zeros_kidney / num_patnum,
+    Percent_missing_sleep_apnea = num_zeros_sleep_apnea / num_patnum,
+    Percent_missing_bmi35 = num_zeros_bmi35 / num_patnum,
+    Percent_missing_bmi40 = num_zeros_bmi40 / num_patnum
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_nomen_code) <- c(
+  "nomen_code", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_sleep_apnea",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial",
+  "Percent_missing_kidney",
+    "Percent_missing_sleep_apnea",
+"Percent_missing_bmi35",
+  "Percent_missing_bmi40"
+)
+
+
+df_code_nomen_code_final <- df_code_nomen_code %>%
+  select(nomen_code,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+    Percent_missing_bmi35,
+    Percent_missing_bmi40
+  )
+
+df_code_nomen_code_final
+```
+
+```{r missing_nomen_bar}
+# Reshape data from wide to long format for ggplot
+result_long_nomen_code <- pivot_longer(df_code_nomen_code_final, 
+                             cols = Percent_missing_nicotine:Percent_missing_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_nomen_code$nomen_code <- factor(result_long_nomen_code$nomen_code)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_nomen_code <- ggplot(result_long_nomen_code, aes(x = nomen_code, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and Nomenclature Code",
+       x = "Nomenclature Code",
+       y = "Percentage of Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_nomen_code.png", plot = prop_zero_by_nomen_code, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_nomen_code
+```
+
+A2_CODE_SEX
+
+```{r missing_sex_freq}
+# calculations for A2_CODE_SEX
+
+df_code_sex <- df %>%
+  group_by(A2_CODE_SEX, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+     total_sleep_apnea = sum(sleep_apnea),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40)
+  ) %>%
+  ungroup() %>%
+  group_by(A2_CODE_SEX) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+        num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = num_zeros_nicotine / num_patnum,
+    Percent_missing_indweight = num_zeros_indweight / num_patnum,
+    Percent_missing_alcohol = num_zeros_alcohol / num_patnum,
+    Percent_missing_diabetes = num_zeros_diabetes / num_patnum,
+    Percent_missing_copd = num_zeros_copd / num_patnum,
+    Percent_missing_hypertension = num_zeros_hypertension / num_patnum,
+    Percent_missing_myocardial = num_zeros_myocardial / num_patnum,
+    Percent_missing_kidney = num_zeros_kidney / num_patnum,
+    Percent_missing_sleep_apnea = num_zeros_bmi35 / num_patnum,
+        Percent_missing_bmi35 = num_zeros_bmi35 / num_patnum,
+    Percent_missing_bmi40 = num_zeros_bmi40 / num_patnum
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_sex) <- c(
+  "A2_CODE_SEX", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_sleep_apnea",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial", 
+  "Percent_missing_kidney",
+  "Percent_missing_sleep_apnea",
+  "Percent_missing_bmi35",
+  "Percent_missing_bmi40"
+)
+
+
+df_code_sex_final <- df_code_sex %>%
+  select(A2_CODE_SEX,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+    Percent_missing_bmi35,
+    Percent_missing_bmi40
+  )
+
+
+df_code_sex_final
+```
+
+```{r missing_sex_freq_select_indicators}
+# calculations for A2_CODE_SEX
+
+df_code_sex <- df %>%
+  group_by(A2_CODE_SEX, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_diabetes = sum(Diabetes),
+    total_hypertension = sum(Hypertension),
+     total_sleep_apnea = sum(sleep_apnea),
+  ) %>%
+  ungroup() %>%
+  group_by(A2_CODE_SEX) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_absent_nicotine = (num_zeros_nicotine / num_patnum)*100,
+    Percent_absent_indweight = (num_zeros_indweight / num_patnum)*100,
+    Percent_absent_diabetes = (num_zeros_diabetes / num_patnum)*100,
+    Percent_absent_hypertension = (num_zeros_hypertension / num_patnum)*100,
+    Percent_absent_sleep_apnea = (num_zeros_sleep_apnea / num_patnum)*100,
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_sex) <- c(
+  "A2_CODE_SEX", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_diabetes", 
+  "num_zeros_hypertension", 
+  "num_zeros_sleep_apnea",
+  "num_patnum", 
+  "Percent_absent_nicotine", 
+  "Percent_absent_indweight", 
+  "Percent_absent_diabetes", 
+  "Percent_absent_hypertension", 
+  "Percent_absent_sleep_apnea")
+
+
+df_code_sex_final_sel_indicators <- df_code_sex %>%
+  select(A2_CODE_SEX,
+    num_patnum,
+    Percent_absent_nicotine,
+    Percent_absent_indweight,
+    Percent_absent_diabetes,
+    Percent_absent_hypertension,
+    Percent_absent_sleep_apnea)
+
+
+df_code_sex_final_sel_indicators 
+```
+
+```{r missing_sex_chart_select_indicators}
+# Reshape data from wide to long format for ggplot
+result_long_sex <- pivot_longer(df_code_sex_final_sel_indicators, 
+                             cols = Percent_absent_nicotine:Percent_absent_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_sex$A2_CODE_SEX <- factor(result_long_sex$A2_CODE_SEX)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_sex <- ggplot(result_long_sex, aes(x = A2_CODE_SEX, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion Absent by Variable and Sex",
+       x = "Sex",
+       y = "Percentage Absent") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+  ylim(0,100)# Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_sex
+```
+
+```{r missing_sex_bar}
+# Reshape data from wide to long format for ggplot
+result_long_sex <- pivot_longer(df_code_sex_final, 
+                             cols = Percent_missing_nicotine:Percent_missing_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_sex$A2_CODE_SEX <- factor(result_long_sex$A2_CODE_SEX)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_sex <- ggplot(result_long_sex, aes(x = A2_CODE_SEX, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and Sex",
+       x = "Sex",
+       y = "Percentage of Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1)) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_sex
+```
+
+Age group
+
+```{r missing_agegrp_freq}
+# calculations for age_group
+
+df_code_age_group <- df %>%
+  group_by(age_group, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_sleep_apnea = sum(sleep_apnea),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40)
+  ) %>%
+  ungroup() %>%
+  group_by(age_group) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = num_zeros_nicotine / num_patnum,
+    Percent_missing_indweight = num_zeros_indweight / num_patnum,
+    Percent_missing_alcohol = num_zeros_alcohol / num_patnum,
+    Percent_missing_diabetes = num_zeros_diabetes / num_patnum,
+    Percent_missing_copd = num_zeros_copd / num_patnum,
+    Percent_missing_hypertension = num_zeros_hypertension / num_patnum,
+    Percent_missing_myocardial = num_zeros_myocardial / num_patnum,
+    Percent_missing_kidney = num_zeros_kidney / num_patnum,
+    Percent_missing_sleep_apnea = num_zeros_sleep_apnea / num_patnum,
+    Percent_missing_bmi35 = num_zeros_bmi35 / num_patnum,
+    Percent_missing_bmi40 = num_zeros_bmi40 / num_patnum
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_age_group) <- c(
+  "age_group", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_sleep_apnea",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial", 
+  "Percent_missing_kidney",
+  "Percent_missing_sleep_apnea",
+  "Percent_missing_bmi35",
+  "Percent_missing_bmi40"
+)
+
+
+df_code_age_group_final <- df_code_age_group %>%
+  select(age_group,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+    Percent_missing_bmi35,
+    Percent_missing_bmi40
+  )
+
+
+df_code_age_group_final
+```
+
+```{r missing_agegrp_freq_select_indicators}
+# calculations for A2_CODE_SEX
+
+df_code_age_group <- df %>%
+  group_by(age_group, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_diabetes = sum(Diabetes),
+    total_hypertension = sum(Hypertension),
+     total_sleep_apnea = sum(sleep_apnea)
+  ) %>%
+  ungroup() %>%
+  group_by(age_group) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_absent_nicotine = (num_zeros_nicotine / num_patnum)*100,
+    Percent_absent_indweight = (num_zeros_indweight / num_patnum)*100,
+    Percent_absent_diabetes = (num_zeros_diabetes / num_patnum)*100,
+    Percent_absent_hypertension = (num_zeros_hypertension / num_patnum)*100,
+    Percent_absent_sleep_apnea = (num_zeros_sleep_apnea / num_patnum)*100
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_age_group) <- c(
+  "age_group", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_diabetes", 
+  "num_zeros_hypertension", 
+  "num_zeros_sleep_apnea",
+  "num_patnum", 
+  "Percent_absent_nicotine", 
+  "Percent_absent_indweight", 
+  "Percent_absent_diabetes", 
+  "Percent_absent_hypertension", 
+  "Percent_absent_sleep_apnea")
+
+
+df_code_age_group_sel_indicators <- df_code_age_group%>%
+  select(age_group,
+    num_patnum,
+    Percent_absent_nicotine,
+    Percent_absent_indweight,
+    Percent_absent_diabetes,
+    Percent_absent_hypertension,
+    Percent_absent_sleep_apnea)
+
+
+df_code_age_group_sel_indicators 
+```
+
+```{r missing_agegrp_bar_select_indicators}
+# Reshape data from wide to long format for ggplot
+result_long_agegroup <- pivot_longer(df_code_age_group_sel_indicators, 
+                             cols = Percent_absent_nicotine:Percent_absent_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_agegroup$age_group <- factor(result_long_agegroup$age_group)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_agegroup <- ggplot(result_long_agegroup, aes(x = age_group, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion Absent by Variable and Age Group",
+       x = "Age group",
+       y = "Percentage Absent") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_agegroup.png", plot = prop_zero_by_agegroup, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_agegroup
+```
+
+Per loss group
+
+```{r missing_losgrp_freq}
+# calculations for los_group
+
+
+df_code_LOSHOS_group <- df %>%
+  group_by(loshos_group, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_sleep_apnea = sum(sleep_apnea),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40)
+  ) %>%
+  ungroup() %>%
+  group_by(loshos_group) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = num_zeros_nicotine / num_patnum,
+    Percent_missing_indweight = num_zeros_indweight / num_patnum,
+    Percent_missing_alcohol = num_zeros_alcohol / num_patnum,
+    Percent_missing_diabetes = num_zeros_diabetes / num_patnum,
+    Percent_missing_copd = num_zeros_copd / num_patnum,
+    Percent_missing_hypertension = num_zeros_hypertension / num_patnum,
+    Percent_missing_myocardial = num_zeros_myocardial / num_patnum,
+    Percent_missing_kidney = num_zeros_kidney / num_patnum,
+    Percent_missing_sleep_apnea = num_zeros_sleep_apnea / num_patnum,
+    Percent_missing_bmi35 = num_zeros_bmi35 / num_patnum,
+    Percent_missing_bmi40 = num_zeros_bmi40 / num_patnum
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_LOSHOS_group) <- c(
+  "loshos_group", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_sleep_apnea",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_patnum", 
+  "Percent_absent_nicotine", 
+  "Percent_absent_indweight", 
+  "Percent_absent_alcohol", 
+  "Percent_absent_diabetes", 
+  "Percent_absent_copd", 
+  "Percent_absent_hypertension", 
+  "Percent_absent_myocardial", 
+  "Percent_absent_kidney",
+  "Percent_absent_sleep_apnea",
+  "Percent_absent_bmi35",
+  "Percent_absent_bmi40"
+)
+
+
+df_code_LOSHOS_group_final <- df_code_LOSHOS_group %>%
+  select(loshos_group,
+    num_patnum,
+    Percent_absent_nicotine,
+    Percent_absent_indweight,
+    Percent_absent_alcohol,
+    Percent_absent_diabetes,
+    Percent_absent_copd,
+    Percent_absent_hypertension,
+    Percent_absent_myocardial,
+    Percent_absent_kidney,
+    Percent_absent_sleep_apnea,
+    Percent_absent_bmi35,
+    Percent_absent_bmi40
+  )
+
+df_code_LOSHOS_group_final
+```
+
+```{r missing_losgrp_freq_select_indicators}
+# calculations for los_group
+
+df_code_LOSHOS_group <- df %>%
+  group_by(loshos_group, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_diabetes = sum(Diabetes),
+    total_hypertension = sum(Hypertension),
+    total_sleep_apnea = sum(sleep_apnea),
+  ) %>%
+  ungroup() %>%
+  group_by(loshos_group) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_absent_nicotine = (num_zeros_nicotine / num_patnum)*100,
+    Percent_absent_indweight = (num_zeros_indweight / num_patnum)*100,
+    Percent_absent_diabetes = (num_zeros_diabetes / num_patnum)*100,
+    Percent_absent_hypertension = (num_zeros_hypertension / num_patnum)*100,
+    Percent_absent_sleep_apnea = (num_zeros_sleep_apnea / num_patnum)*100,
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_LOSHOS_group) <- c(
+  "loshos_group", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_diabetes", 
+  "num_zeros_hypertension", 
+  "num_zeros_sleep_apnea",
+  "num_patnum", 
+  "Percent_absent_nicotine", 
+  "Percent_absent_indweight", 
+  "Percent_absent_diabetes", 
+  "Percent_absent_hypertension", 
+  "Percent_absent_sleep_apnea"
+)
+
+
+df_code_LOSHOS_group_final_sel_indicators <- df_code_LOSHOS_group %>%
+  select(loshos_group,
+    num_patnum,
+    Percent_absent_nicotine,
+    Percent_absent_indweight,
+     Percent_absent_diabetes,
+     Percent_absent_hypertension,
+    Percent_absent_sleep_apnea,
+   )
+
+
+df_code_LOSHOS_group_final_sel_indicators
+```
+
+```{r missing_losgrp_chart_select_indicators}
+# Reshape data from wide to long format for ggplot
+result_long_LOSHOSgroup <- pivot_longer(df_code_LOSHOS_group_final_sel_indicators, 
+                             cols = Percent_absent_nicotine:Percent_absent_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_LOSHOSgroup$loshos_group <- factor(result_long_LOSHOSgroup$loshos_group)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_LOSHOSgroup <- ggplot(result_long_LOSHOSgroup, aes(x = loshos_group, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and LOSHOS Group",
+       x = "Length of stay category",
+       y = "Percentage Absent") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))+ # Rotate x-axis labels if needed
+  ylim(0,10)
+  
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_LOSHOSgroup.png", plot = prop_zero_by_LOSHOSgroup, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_LOSHOSgroup
+```
+
+```{r missing_losgrp_bar}
+# Reshape data from wide to long format for ggplot
+result_long_LOSHOSgroup <- pivot_longer(df_code_LOSHOS_group_final, 
+                             cols = Percent_absent_nicotine:Percent_absent_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_LOSHOSgroup$loshos_group <- factor(result_long_LOSHOSgroup$loshos_group)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_LOSHOSgroup <- ggplot(result_long_LOSHOSgroup, aes(x = loshos_group, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and LOSHOS Group",
+       x = "Length of stay category",
+       y = "Percentage Absent") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1)) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_LOSHOSgroup.png", plot = prop_zero_by_LOSHOSgroup, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_LOSHOSgroup
+```
+
+Stay length
+
+```{r missing_staylen_freq}
+# stay length calculations
+
+
+df_code_stay_length <- df %>%
+  group_by(stay_length, PATNUM) %>%
+  summarise(
+    total_nicotine = sum(Nicotine),
+    total_indweight = sum(IndWeight),
+    total_alcohol = sum(Alcohol),
+    total_diabetes = sum(Diabetes),
+    total_copd = sum(COPD),
+    total_hypertension = sum(Hypertension),
+    total_myocardial = sum(Myocardial),
+    total_kidney = sum(Kidney),
+    total_sleep_apnea = sum(sleep_apnea),
+    total_bmi35 = sum(bmi35),
+    total_bmi40 = sum(bmi40)
+  ) %>%
+  ungroup() %>%
+  group_by(stay_length) %>%
+  summarise(
+    num_zeros_nicotine = sum(total_nicotine == 0),
+    num_zeros_indweight = sum(total_indweight == 0),
+    num_zeros_alcohol = sum(total_alcohol == 0),
+    num_zeros_diabetes = sum(total_diabetes == 0),
+    num_zeros_copd = sum(total_copd == 0),
+    num_zeros_hypertension = sum(total_hypertension == 0),
+    num_zeros_myocardial = sum(total_myocardial == 0),
+    num_zeros_kidney = sum(total_kidney == 0),
+    num_zeros_sleep_apnea = sum(total_sleep_apnea == 0),
+    num_zeros_bmi35 = sum(total_bmi35 == 0),
+    num_zeros_bmi40 = sum(total_bmi40 == 0),
+    num_patnum = n_distinct(PATNUM)
+  ) %>%
+  mutate(
+    Percent_missing_nicotine = num_zeros_nicotine / num_patnum,
+    Percent_missing_indweight = num_zeros_indweight / num_patnum,
+    Percent_missing_alcohol = num_zeros_alcohol / num_patnum,
+    Percent_missing_diabetes = num_zeros_diabetes / num_patnum,
+    Percent_missing_copd = num_zeros_copd / num_patnum,
+    Percent_missing_hypertension = num_zeros_hypertension / num_patnum,
+    Percent_missing_myocardial = num_zeros_myocardial / num_patnum,
+    Percent_missing_kidney = num_zeros_kidney / num_patnum,
+    Percent_missing_sleep_apnea = num_zeros_sleep_apnea / num_patnum,
+    Percent_missing_bmi35 = num_zeros_bmi35 / num_patnum,
+    Percent_missing_bmi40 = num_zeros_bmi40 / num_patnum
+  )
+
+# Optional: Rename the columns for readability
+colnames(df_code_stay_length) <- c(
+  "stay_length", 
+  "num_zeros_nicotine", 
+  "num_zeros_indweight", 
+  "num_zeros_alcohol", 
+  "num_zeros_diabetes", 
+  "num_zeros_copd", 
+  "num_zeros_hypertension", 
+  "num_zeros_myocardial", 
+  "num_zeros_kidney",
+  "num_zeros_sleep_apnea",
+  "num_zeros_bmi35",
+  "num_zeros_bmi40",
+  "num_patnum", 
+  "Percent_missing_nicotine", 
+  "Percent_missing_indweight", 
+  "Percent_missing_alcohol", 
+  "Percent_missing_diabetes", 
+  "Percent_missing_copd", 
+  "Percent_missing_hypertension", 
+  "Percent_missing_myocardial", 
+  "Percent_missing_kidney",
+  "Percent_missing_sleep_apnea",
+  "Percent_missing_bmi35",
+  "Percent_missing_bmi40"
+)
+
+
+df_code_stay_length_final <- df_code_stay_length %>%
+  select(stay_length,
+    num_patnum,
+    Percent_missing_nicotine,
+    Percent_missing_indweight,
+    Percent_missing_alcohol,
+    Percent_missing_diabetes,
+    Percent_missing_copd,
+    Percent_missing_hypertension,
+    Percent_missing_myocardial,
+    Percent_missing_kidney,
+    Percent_missing_sleep_apnea,
+    Percent_missing_bmi35,
+    Percent_missing_bmi40
+  )
+
+
+df_code_stay_length_final
+```
+
+```{r missing_staylen_bar}
+# Reshape data from wide to long format for ggplot
+result_long_staylength <- pivot_longer(df_code_stay_length_final, 
+                             cols = Percent_missing_nicotine:Percent_missing_sleep_apnea, 
+                             names_to = "Variable", 
+                             values_to = "Percentage")
+
+result_long_staylength$stay_length <- factor(result_long_staylength$stay_length)
+
+# Define a color palette
+my_colors <- c("#FF9999", "#66CCCC", "#99CC99", "#FFCC99", "#CCCCFF", "#FF6666", "#669999", "#CCCCCC","#000000", "#d3d3d3")
+
+# Plot
+prop_zero_by_staylength <- ggplot(result_long_staylength, aes(x = stay_length, y = Percentage, fill = Variable)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) + # Adjust the width as needed
+  scale_fill_manual(values = my_colors) + # Specify the color palette
+  labs(title = "Proportion of Missing Variable and Stay Length",
+       x = "Length of stay length",
+       y = "Percentage of Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1)) # Rotate x-axis labels if needed
+
+# Save the plot as a PNG file
+# ggsave("prop_zero_by_sex.png", plot = prop_zero_by_sex)
+ggsave("prop_zero_by_staylength.png", plot = prop_zero_by_staylength, width = 10, height = 6)
+
+
+# Print the plot
+prop_zero_by_staylength
+```
+
+Add BMI variables
+
+```{r new_df_bmi, results='hide'}
+# Collapse variables by summing over CODE_AGR and PATNUM
+wide_df <- df %>%
+  group_by(CODE_AGR, care_giver_id, PATNUM) %>%
+  summarise(across(c(IndWeight, Nicotine, Alcohol, Diabetes, COPD, Hypertension, Myocardial, Kidney, sleep_apnea, bmi35, bmi40), sum))
+
+# Assign 0 if sum is 0, else 1 for each variable
+wide_df <- wide_df %>%
+  mutate(across(c(IndWeight, Nicotine, Alcohol, Diabetes, COPD, Hypertension, Myocardial, Kidney, sleep_apnea, bmi35, bmi40), ~ifelse(. == 0, 0, 1)))
+
+# Print new dataframe
+print(wide_df)
+```
+
+```{r new_df_bmi_intermediate, results='hide'}
+# Create a new dataframe
+wide_df <- df %>%
+  group_by(CODE_AGR, care_giver_id, PATNUM) %>%
+  summarise(A2_CODE_SEX = first(A2_CODE_SEX),
+    age_numeric = mean(age_numeric),
+    LOSHOS = mean(LOSHOS),
+    IndWeight = sum(IndWeight),
+    Nicotine = sum(Nicotine),
+    Alcohol = sum(Alcohol),
+    Diabetes = sum(Diabetes),
+    COPD = sum(COPD),
+    Hypertension = sum(Hypertension),
+    Myocardial = sum(Myocardial),
+    Kidney = sum(Kidney),
+    sleep_apnea = sum(sleep_apnea),
+    bmi35 = sum(bmi35),
+    bmi40 = sum(bmi40),
+  )
+
+# Print the new dataframe
+print(wide_df)
+```
+
+```{r newdata_age_group}
+# Divide age into age groups
+
+# Define the breaks for age groups
+breaks <- c(18, 30, 40, 50, 60, 85)
+
+# Define the labels for age groups
+labels <- c("18-30", "31-40", "41-50", "51-60", "> 60")
+
+# Create a new variable for age groups
+wide_df$age_group <- cut(wide_df$age_numeric, breaks = breaks, labels = labels, include.lowest = TRUE)
+```
+
+```{r newdata_los_group}
+# Divide length of stay into groups
+
+# Define the breaks for loshos groups
+breaks_loshos <- c(0, 1, 3, 240)
+
+# Define the labels for loshos groups
+labels_loshos <- c("0-1", "2-3", "4-240")
+
+# Create a new variable for loshos groups
+wide_df$loshos_group <- cut(wide_df$LOSHOS, breaks = breaks_loshos, labels = labels_loshos, include.lowest = TRUE)
+```
+
+```{r new_df_bmi_bin, results='hide'}
+# Assign 0 if sum is 0, else 1 for each variable
+wide_df <- wide_df %>%
+  mutate(across(c(IndWeight, Nicotine, Alcohol, Diabetes, COPD, Hypertension, Myocardial, Kidney, sleep_apnea, bmi35, bmi40), ~ifelse(. == 0, 0, 1)))
+
+# Print new dataframe
+print(wide_df)
+```
+
+```{r wide_select_indicators, results='markup'}
+
+# Specify the columns to keep
+columns_to_keep <- c(
+  "CODE_AGR",
+  "care_giver_id",
+  "PATNUM",
+    "age_group",
+  "loshos_group",
+  "A2_CODE_SEX",
+  "IndWeight",
+  "Nicotine",
+  "Diabetes",
+  "Hypertension",
+  "sleep_apnea"
+)
+
+# Filter the dataframe to keep only the specified columns
+wide_data_select_indicators <- wide_df %>%
+  select(all_of(columns_to_keep))
+
+# Print the filtered dataframe
+print(wide_data_select_indicators)
+```
+
+Some summary statistics for new_df - patient level
+
+```{r age_hist}
+# Create the ggplot object
+age_plot <- ggplot(patient_df, aes(x = age_numeric)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Histogram Plot of Age", x = "Age") +
+  theme_minimal()
+
+# Customize x-axis tick marks
+age_plot <- age_plot +
+  scale_x_continuous(breaks = seq(0, 90, by = 10), labels = seq(0, 90, by = 10))
+
+# Convert ggplot to plotly for interactivity (if needed)
+# Save the plot as a PNG file
+ggsave("age_distribution.png", plot = age_plot, width = 10, height = 6)
+
+# Display the modified plot
+age_plot
+```
+
+Length of stay more than 90 days
+
+```{r los_gt_90}
+loshos_greater_90 <- patient_df %>%
+  filter(LOSHOS>90)
+
+dim(loshos_greater_90)[1]
+```
+
+```{r divide_age_groups}
+# Divide length of stay into groups
+
+# Define the breaks for loshos groups
+breaks_loshos <- c(0, 1, 3, 240)
+
+# Define the labels for loshos groups
+labels_loshos <- c("0-1", "2-3", "4-240")
+
+# Create a new variable for loshos groups
+patient_df$loshos_group <- cut(patient_df$LOSHOS, breaks = breaks_loshos, labels = labels_loshos, include.lowest = TRUE)
+```
+
+```{r losgrp_percent}
+# Create frequency table
+freq_table <- table(patient_df$loshos_group)
+
+# Calculate percentages
+percentages <- prop.table(freq_table) * 100
+
+# Format percentages with two decimal places
+percentages_formatted <- sprintf("%.2f%%", percentages)
+
+# Combine counts and percentages into a data frame
+result <- data.frame("Length of stay category" = names(freq_table), Count = as.vector(freq_table), Percent = percentages_formatted)
+
+# Print the result with specified styling
+result %>%
+  kable(caption = "Frequency table by Length of Stay in Hospital Category", align = "c") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped", font_size = 14)
+```
+
+Sex
+
+```{r sex_percent}
+# Create frequency table
+freq_table <- table(patient_df$A2_CODE_SEX)
+
+# Calculate percentages
+percentages <- prop.table(freq_table) * 100
+
+# Format percentages with two decimal places
+percentages_formatted <- sprintf("%.2f%%", percentages)
+
+# Combine counts and percentages into a data frame
+result <- data.frame(Sex = names(freq_table), Count = as.vector(freq_table), Percent = percentages_formatted)
+
+# Print the result with specified styling
+result %>%
+  kable(caption = "Frequency table by A2_CODE_SEX", align = "c") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped", font_size = 14)
+```
+
+Age group distribution at patient level
+
+```{r age_group_patient_level}
+# Divide age into age groups
+
+# Define the breaks for age groups
+breaks <- c(18, 30, 40, 50, 60, 85)
+
+# Define the labels for age groups
+labels <- c("18-30", "31-40", "41-50", "51-60", "> 60")
+
+# Create a new variable for age groups
+patient_df$age_group <- cut(patient_df$age_numeric, breaks = breaks, labels = labels, include.lowest = TRUE)
+```
+
+```{r agegrp_patientdf}
+# Create frequency table
+freq_table <- table(patient_df$age_group)
+
+# Calculate percentages
+percentages <- prop.table(freq_table) * 100
+
+# Format percentages with two decimal places
+percentages_formatted <- sprintf("%.2f%%", percentages)
+
+# Combine counts and percentages into a data frame
+result <- data.frame("Age Group" = names(freq_table), Count = as.vector(freq_table), Percent = percentages_formatted)
+
+# Print the result with specified styling
+result %>%
+  kable(caption = "Frequency table by Age Group", align = "c") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = "striped", font_size = 14)
+```
+
+Create long form dataset
+
+```{r check_wide_df_dim}
+dim(wide_df)
+```
+
+```{r long_data, results='hide'}
+# Convert to long format
+long_df <- wide_df %>%
+  pivot_longer(
+    cols = starts_with(c("IndWeight", "Nicotine", "Alcohol", "Diabetes", "COPD", "Hypertension", "Myocardial", "Kidney", "sleep_apnea")),
+    names_to = "indicator",
+    values_to = "response"
+  
+  )
+
+head(long_df)
+```
+
+```{r export_long_select_indicators, results='hide'}
+# Filter rows based on indicator values
+long_df_select_indic <- long_df %>%
+  filter(indicator %in% c("IndWeight", "Nicotine", "Diabetes", "Hypertension", "sleep_apnea"))
+
+head(long_df_select_indic)
+```
+
+Check proportion of patients with diabetes
+
+```{r diabetes_percent}
+# Filter rows where Diabetes == 1 or Hypertension == 1
+filtered_df_diabetes_or_hyp <- wide_df %>%
+  filter(Diabetes == 1 | Hypertension == 1)
+
+# Calculate the proportion
+proportion <- nrow(filtered_df_diabetes_or_hyp) / nrow(wide_df)
+
+# Print the proportion
+cat("Proportion of PATNUM with Diabetes == 1 or Hypertension == 1:", proportion, "\n")
+```
+
+```{r diabetes_hyp_percent}
+# Filter rows where Diabetes == 1 or Hypertension == 1
+filtered_df_diabetes_and_hyp <- wide_df %>%
+  filter(Diabetes == 1 & Hypertension == 1)
+
+# Calculate the proportion
+proportion <- nrow(filtered_df_diabetes_and_hyp) / nrow(wide_df)
+
+# Print the proportion
+cat("Proportion of PATNUM with Diabetes == 1 and Hypertension == 1:", proportion, "\n")
+```
+
+Check number of diagnoses by Patnum and StayID
+
+```{r diag_per_patient, results='hide'}
+# Stays by hospital - head
+diagnoses_codes_count <- df %>%
+  group_by(PATNUM, STAYNUM_ID) %>%
+  summarise(`Total Diagnoses Codes` = n_distinct(CODE_DIAGNOSE)) %>%
+  arrange(desc(`Total Diagnoses Codes`))
+diagnoses_codes_count
+```
+
+```{r bmi_checks, results='hide'}
+# Stays by hospital - head
+bmi_checks <- df %>%
+  group_by(PATNUM, STAYNUM_ID) %>%
+  summarise(`Total bmi35` = sum(bmi35),
+            `Total bmi40` = sum(bmi40))
+
+filtered_df <- bmi_checks %>%
+  filter(`Total bmi35` >= 1, `Total bmi40` >= 1)
+
+# Display the resulting dataframe
+paste0("Number of patients with both BMI codes for the same stay: ", nrow(filtered_df))
+```
+
+Check missing bmis for those with weight diagnosis
+
+```{r missing_bmi_weight_diag}
+
+# Re-check
+
+weight_diagnosis_df <- df %>%
+  group_by(PATNUM) %>%
+  filter(IndWeight == 1) %>%
+  summarise(count = n())
+num_patients_weightdiag <- nrow(weight_diagnosis_df)
+
+paste0("Number of patients with diagnosis but no BMI category: ", num_patients_weightdiag)
+```
+
+```{r weight_diag_no_bmi}
+
+# Calculate proportion with weight diagnosis but no bmi
+
+
+missing_bmi_df <- df %>%
+  filter(IndWeight == 1) %>%
+  group_by(PATNUM) %>%
+  summarise(`Total bmi35` = sum(bmi35),
+            `Total bmi40` = sum(bmi40)) %>%  
+    filter(`Total bmi35` ==0, `Total bmi40` == 0)
+
+num_weightdiag_nobmi <- nrow(missing_bmi_df)
+
+print(num_patients_weightdiag)
+
+paste0("Number and percent of patients with weight diagnosis but no BMI category: ", num_weightdiag_nobmi," (", round((num_weightdiag_nobmi/num_patients_weightdiag)*100,2), "%", ")")
+```
+
+Create split samples for use in SAS - where models not converging
+
+```{r create_split_samples}
+
+# Add vector "all_hospitals" with a vector of all hospital code strings
+
+# Shuffle the hospitals vector
+set.seed(123)  
+shuffled_hospitals <- sample(all_hospitals)
+ 
+# Number of samples and sample size
+n_samples <- 5
+sample_size <- 20
+ 
+# Split the shuffled hospitals vector into chunks of 10
+samples <- split(shuffled_hospitals, rep(1:ceiling(length(shuffled_hospitals)/sample_size), each = sample_size, length.out = length(shuffled_hospitals)))
+ 
+# Print the first sample to verify
+print(samples[[5]])
+```
+
+New way of splitting sample
+
+Create long dataset
+
+```{r create_long_split_samples, results='hide'}
+# Create 10 subsets of a dataset
+
+# Initialize an empty data frame to store the results
+result <- data.frame()
+
+# Define a function to create the dataset variable
+create_subsets <- function(data, percentage) {
+  data <- data %>%
+    arrange(CODE_AGR) %>%     # Arrange by CODE_AGR
+    group_by(CODE_AGR) %>%    # Group by CODE_AGR
+    mutate(row_num = row_number()) %>%  # Add row number within each group
+    ungroup()
+  
+  # Calculate the number of observations per subset for each CODE_AGR
+  data <- data %>%
+    group_by(CODE_AGR) %>%
+    mutate(n_obs = n(),
+           n_per_subset = ceiling(n_obs * percentage / 100)) %>%
+    ungroup()
+
+  # Assign dataset numbers
+  data <- data %>%
+    mutate(dataset = (row_num - 1) %/% n_per_subset + 1)
+  
+  return(data)
+}
+
+# Create subsets with 10% of the observations in each
+df_subset_long <- create_subsets(long_df_select_indic, 10)
+
+# View the first few rows of the resulting dataframe
+head(df_subset_long)
+```
+
+Create wide datasets
+
+```{r create_wide_split_samples}
+wide_data_select_indicators$dataset <- ave(seq_along(wide_data_select_indicators$CODE_AGR), wide_data_select_indicators$CODE_AGR, FUN = function(x) (x %% 2) + 1)
+```
+
+Summary table by patient
+
+```{r summary_by_patient}
+# Create frequency table for CODE_A2_SEX
+sex_freq <- patient_df %>%
+  count(A2_CODE_SEX) %>%
+  mutate(Percent = sprintf("%.1f%%", (n / sum(n)) * 100))
+
+# Create frequency table for loshos_group
+loshos_freq <- patient_df %>%
+  count(loshos_group) %>%
+  mutate(Percent = sprintf("%.1f%%", (n / sum(n)) * 100))
+
+# Create frequency table for age_group
+age_freq <- patient_df %>%
+  count(age_group) %>%
+  mutate(Percent = sprintf("%.1f%%", (n / sum(n)) * 100))
+
+# Print the frequency tables
+print("Frequency table for CODE_A2_SEX:")
+print(sex_freq)
+
+print("Frequency table for loshos_group:")
+print(loshos_freq)
+
+print("Frequency table for age_group:")
+print(age_freq)
+```
+
+```{r}
+# Create the data frame
+data <- data.frame(
+  Variable = c("Weight", "Nicotine", "Alcohol", "Diabetes", "COPD", "Hypertension", "Myocardial", "Kidney", "Sleep Apnea"),
+  Percent_missing = c(0.044795, 0.787717, 0.986547, 0.86322, 0.979645, 0.755529, 0.991407, 0.992675, 0.708903) * 100
+)
+
+# Create the bar chart
+ggplot(data, aes(x = Variable, y = Percent_missing)) +
+  geom_bar(stat = "identity", fill = "#10A843") +
+  labs(title = "Percentage of Absent by Diagnosis",
+       x = "Variable",
+       y = "Percent Absent") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14)
+  )
+```
+
+End of the analysis
